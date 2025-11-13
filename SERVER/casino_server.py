@@ -5,9 +5,10 @@ import os
 from datetime import datetime
 
 app = Flask(__name__)
-
-# Настройки базы данных
 DATABASE = 'casino.db'
+
+# Настройки администратора
+ADMIN_USERNAME = "Tintur"
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE)
@@ -15,13 +16,11 @@ def get_db_connection():
     return conn
 
 def init_database():
-    """Инициализация базы данных"""
     if not os.path.exists(DATABASE):
         print("Создание новой базы данных...")
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Таблица пользователей
         cursor.execute('''
             CREATE TABLE users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +30,6 @@ def init_database():
             )
         ''')
         
-        # Таблица транзакций
         cursor.execute('''
             CREATE TABLE transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,8 +42,17 @@ def init_database():
             )
         ''')
         
-        # Добавляем тестовых пользователей
+        cursor.execute('''
+            CREATE TABLE system_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Создаем администратора с большим балансом
         test_users = [
+            (ADMIN_USERNAME, 10000),  # Администратор
             ('Player1', 1500),
             ('Player2', 800),
             ('Player3', 2500),
@@ -54,78 +61,62 @@ def init_database():
         for username, balance in test_users:
             cursor.execute('INSERT OR IGNORE INTO users (username, balance) VALUES (?, ?)', (username, balance))
         
+        # Логируем создание системы
+        cursor.execute('INSERT INTO system_log (message) VALUES (?)', 
+                      (f'Система запущена. Администратор: {ADMIN_USERNAME}',))
+        
         conn.commit()
         conn.close()
         print("✅ База данных создана успешно!")
+        print(f"👑 Администратор системы: {ADMIN_USERNAME}")
     else:
         print("✅ База данных уже существует")
 
-# API endpoints
 @app.route('/users/get', methods=['GET'])
 def get_user_balance():
-    """Получить баланс пользователя"""
     username = request.args.get('name')
-    
     if not username:
         return "Error: username required", 400
     
-    print(f"📊 Запрос баланса для: {username}")
-    
     conn = get_db_connection()
-    
-    user = conn.execute(
-        'SELECT * FROM users WHERE username = ?', (username,)
-    ).fetchone()
+    user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     
     if user:
         balance = user['balance']
-        print(f"💰 Баланс {username}: {balance}")
+        print(f"💰 Запрос баланса: {username} = {balance}")
     else:
-        # Создаем нового пользователя со стартовым балансом
-        print(f"👤 Создание нового пользователя: {username}")
-        conn.execute(
-            'INSERT INTO users (username, balance) VALUES (?, 1000)',
-            (username,)
-        )
+        conn.execute('INSERT INTO users (username, balance) VALUES (?, 1000)', (username,))
         conn.commit()
         balance = 1000
+        print(f"👤 Создан новый пользователь: {username}")
     
     conn.close()
     return str(balance)
 
 @app.route('/users/pay', methods=['GET'])
 def pay_user():
-    """Списать средства с пользователя"""
     username = request.args.get('name')
     money = int(request.args.get('money'))
     
     if not username or money <= 0:
         return "False"
     
-    print(f"➖ Списание {money} у: {username}")
-    
     conn = get_db_connection()
-    
-    user = conn.execute(
-        'SELECT * FROM users WHERE username = ?', (username,)
-    ).fetchone()
+    user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     
     if user and user['balance'] >= money:
         new_balance = user['balance'] - money
-        conn.execute(
-            'UPDATE users SET balance = ? WHERE username = ?',
-            (new_balance, username)
-        )
+        conn.execute('UPDATE users SET balance = ? WHERE username = ?', (new_balance, username))
+        conn.execute('INSERT INTO transactions (user_id, amount, type) VALUES (?, ?, "pay")', (user['id'], money))
         
-        # Записываем транзакцию
-        conn.execute(
-            'INSERT INTO transactions (user_id, amount, type) VALUES (?, ?, "pay")',
-            (user['id'], money)
-        )
+        # Логируем операцию
+        if username == ADMIN_USERNAME:
+            conn.execute('INSERT INTO system_log (message) VALUES (?)', 
+                        (f'Админ {username}: списание {money}',))
         
         conn.commit()
         conn.close()
-        print(f"✅ Успешное списание: {username} -> {new_balance}")
+        print(f"✅ Списание: {username} -{money} = {new_balance}")
         return "True"
     
     conn.close()
@@ -134,95 +125,92 @@ def pay_user():
 
 @app.route('/users/give', methods=['GET'])
 def give_user():
-    """Начислить средства пользователю"""
     username = request.args.get('name')
     money = int(request.args.get('money'))
     
     if not username or money <= 0:
         return "False"
     
-    print(f"➕ Начисление {money} для: {username}")
-    
     conn = get_db_connection()
-    
-    user = conn.execute(
-        'SELECT * FROM users WHERE username = ?', (username,)
-    ).fetchone()
+    user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     
     if user:
         new_balance = user['balance'] + money
-        conn.execute(
-            'UPDATE users SET balance = ? WHERE username = ?',
-            (new_balance, username)
-        )
+        conn.execute('UPDATE users SET balance = ? WHERE username = ?', (new_balance, username))
+        conn.execute('INSERT INTO transactions (user_id, amount, type) VALUES (?, ?, "give")', (user['id'], money))
         
-        # Записываем транзакцию
-        conn.execute(
-            'INSERT INTO transactions (user_id, amount, type) VALUES (?, ?, "give")',
-            (user['id'], money)
-        )
+        # Логируем операцию админа
+        if username == ADMIN_USERNAME:
+            conn.execute('INSERT INTO system_log (message) VALUES (?)', 
+                        (f'Админ {username}: начисление {money}',))
         
         conn.commit()
         conn.close()
-        print(f"✅ Успешное начисление: {username} -> {new_balance}")
+        print(f"✅ Начисление: {username} +{money} = {new_balance}")
         return "True"
     else:
-        # Создаем пользователя если не существует
-        conn.execute(
-            'INSERT INTO users (username, balance) VALUES (?, ?)',
-            (username, 1000 + money)
-        )
+        conn.execute('INSERT INTO users (username, balance) VALUES (?, ?)', (username, 1000 + money))
         conn.commit()
         conn.close()
-        print(f"✅ Создан новый пользователь с начислением: {username}")
+        print(f"✅ Создан новый пользователь: {username} с балансом {1000 + money}")
         return "True"
 
 @app.route('/users/top', methods=['GET'])
 def get_top_users():
-    """Получить топ пользователей по балансу"""
-    print("🏆 Запрос топа пользователей")
-    
     conn = get_db_connection()
-    
-    top_users = conn.execute('''
-        SELECT username, balance 
-        FROM users 
-        ORDER BY balance DESC 
-        LIMIT 10
-    ''').fetchall()
+    top_users = conn.execute('SELECT username, balance FROM users ORDER BY balance DESC LIMIT 10').fetchall()
     
     result = []
     for user in top_users:
-        result.append({
-            'username': user['username'],
-            'balance': user['balance']
-        })
+        result.append({'username': user['username'], 'balance': user['balance']})
     
     conn.close()
+    print("🏆 Запрос топа игроков")
     return jsonify(result)
 
 @app.route('/get/time', methods=['GET'])
 def get_server_time():
-    """Получить серверное время"""
     return str(int(time.time()))
+
+# Админские endpoints
+@app.route('/admin/info', methods=['GET'])
+def admin_info():
+    conn = get_db_connection()
+    
+    # Статистика
+    total_users = conn.execute('SELECT COUNT(*) as count FROM users').fetchone()['count']
+    total_balance = conn.execute('SELECT SUM(balance) as total FROM users').fetchone()['total']
+    recent_logs = conn.execute('SELECT * FROM system_log ORDER BY created_at DESC LIMIT 10').fetchall()
+    
+    info = {
+        'admin': ADMIN_USERNAME,
+        'total_users': total_users,
+        'total_balance': total_balance,
+        'server_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'recent_logs': []
+    }
+    
+    for log in recent_logs:
+        info['recent_logs'].append({
+            'message': log['message'],
+            'time': log['created_at']
+        })
+    
+    conn.close()
+    return jsonify(info)
 
 @app.route('/admin/users', methods=['GET'])
 def get_all_users():
-    """Получить всех пользователей (для админа)"""
     conn = get_db_connection()
-    
-    users = conn.execute('''
-        SELECT username, balance, created_at 
-        FROM users 
-        ORDER BY balance DESC
-    ''').fetchall()
+    users = conn.execute('SELECT username, balance, created_at FROM users ORDER BY balance DESC').fetchall()
     
     result = []
     for user in users:
         result.append({
             'username': user['username'],
             'balance': user['balance'],
-            'created_at': user['created_at']
+            'created_at': user['created_at'],
+            'is_admin': user['username'] == ADMIN_USERNAME
         })
     
     conn.close()
@@ -230,18 +218,18 @@ def get_all_users():
 
 @app.route('/admin/reset/<username>', methods=['POST'])
 def reset_user_balance(username):
-    """Сбросить баланс пользователя"""
     conn = get_db_connection()
     
-    user = conn.execute(
-        'SELECT * FROM users WHERE username = ?', (username,)
-    ).fetchone()
+    user = conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
     
     if user:
-        conn.execute(
-            'UPDATE users SET balance = 1000 WHERE username = ?',
-            (username,)
-        )
+        old_balance = user['balance']
+        conn.execute('UPDATE users SET balance = 1000 WHERE username = ?', (username,))
+        
+        # Логируем сброс
+        conn.execute('INSERT INTO system_log (message) VALUES (?)', 
+                    (f'Админ {ADMIN_USERNAME}: сброс баланса {username} с {old_balance} до 1000',))
+        
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "message": f"Баланс {username} сброшен до 1000"})
@@ -251,126 +239,72 @@ def reset_user_balance(username):
 
 @app.route('/')
 def index():
-    return """
-    <!DOCTYPE html>
+    return f"""
     <html>
     <head>
-        <title>Casino Server</title>
-        <meta charset="utf-8">
+        <title>Turbo Happiness Casino Server</title>
         <style>
-            body { 
-                font-family: Arial, sans-serif; 
-                margin: 40px; 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-            }
-            .container {
-                max-width: 800px;
-                margin: 0 auto;
-                background: rgba(255,255,255,0.1);
-                padding: 30px;
-                border-radius: 15px;
-                backdrop-filter: blur(10px);
-            }
-            h1 { text-align: center; font-size: 2.5em; }
-            .endpoint { 
-                background: rgba(255,255,255,0.2); 
-                padding: 15px; 
-                margin: 10px 0; 
-                border-radius: 8px;
-                border-left: 4px solid #00ff88;
-            }
-            code { 
-                background: rgba(0,0,0,0.3); 
-                padding: 5px 10px; 
-                border-radius: 4px; 
-                font-family: monospace;
-            }
-            .status { 
-                text-align: center; 
-                padding: 20px; 
-                background: rgba(0,255,136,0.2);
-                border-radius: 10px;
-                margin: 20px 0;
-            }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #1a1a1a; color: white; }}
+            .container {{ background: #2d2d2d; padding: 30px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); }}
+            h1 {{ color: #ffd700; text-align: center; }}
+            .admin-badge {{ background: #ff6b00; color: white; padding: 5px 10px; border-radius: 20px; font-size: 0.8em; }}
+            .endpoint {{ background: #3d3d3d; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #007bff; }}
+            .admin-endpoint {{ border-left-color: #ff6b00; }}
+            .server-info {{ background: #4CAF50; padding: 15px; border-radius: 8px; margin: 20px 0; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🎰 Casino Server</h1>
-            <div class="status">
-                <h2>✅ Сервер работает!</h2>
-                <p>Сервер запущен на вашем компьютере</p>
+            <h1>🎰 Turbo Happiness Casino Server</h1>
+            
+            <div class="server-info">
+                <h3>🌐 Информация о сервере</h3>
+                <p><strong>Адрес:</strong> http://192.168.0.177:5000</p>
+                <p><strong>Администратор:</strong> <span class="admin-badge">{ADMIN_USERNAME}</span></p>
+                <p><strong>Статус:</strong> 🟢 Активен</p>
             </div>
             
-            <h3>📡 Доступные endpoints:</h3>
-            <div class="endpoint">
-                <code>GET /users/get?name=USERNAME</code><br>
-                <small>Получить баланс пользователя</small>
-            </div>
-            <div class="endpoint">
-                <code>GET /users/pay?name=USERNAME&money=AMOUNT</code><br>
-                <small>Списать средства</small>
-            </div>
-            <div class="endpoint">
-                <code>GET /users/give?name=USERNAME&money=AMOUNT</code><br>
-                <small>Начислить средства</small>
-            </div>
-            <div class="endpoint">
-                <code>GET /users/top</code><br>
-                <small>Топ игроков</small>
-            </div>
-            <div class="endpoint">
-                <code>GET /get/time</code><br>
-                <small>Серверное время</small>
-            </div>
+            <h3>📡 Основные endpoints:</h3>
+            <div class="endpoint"><b>GET /users/get?name=USERNAME</b> - получить баланс</div>
+            <div class="endpoint"><b>GET /users/pay?name=USERNAME&money=AMOUNT</b> - списать средства</div>
+            <div class="endpoint"><b>GET /users/give?name=USERNAME&money=AMOUNT</b> - начислить средства</div>
+            <div class="endpoint"><b>GET /users/top</b> - топ игроков</div>
+            <div class="endpoint"><b>GET /get/time</b> - серверное время</div>
             
-            <div style="margin-top: 30px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                <h4>🔗 Для OpenComputers используйте URL:</h4>
-                <code style="font-size: 1.2em;">http://localhost:5000</code>
-                <p><small>или IP вашего компьютера в локальной сети</small></p>
-            </div>
+            <h3>👑 Админские endpoints:</h3>
+            <div class="endpoint admin-endpoint"><b>GET /admin/info</b> - информация системы</div>
+            <div class="endpoint admin-endpoint"><b>GET /admin/users</b> - все пользователи</div>
+            <div class="endpoint admin-endpoint"><b>POST /admin/reset/USERNAME</b> - сброс баланса</div>
         </div>
     </body>
     </html>
     """
 
 def get_local_ip():
-    """Получить локальный IP адрес"""
-    import socket
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "не удалось получить"
+    return "192.168.0.177"  # Ваш фиксированный IP
 
 if __name__ == '__main__':
-    # Инициализируем базу данных
     init_database()
-    
-    # Получаем IP адрес
     local_ip = get_local_ip()
     
     print("\n" + "="*60)
-    print("🎰 CASINO SERVER ЗАПУЩЕН НА ВАШЕМ ПК!")
+    print("🎰 TURBO HAPPINESS CASINO SERVER")
     print("="*60)
-    print("🌐 Локальный URL: http://localhost:5000")
-    print("🌐 Сетевой URL:   http://" + local_ip + ":5000")
-    print("📁 База данных:   casino.db")
-    print("🔐 Аутентификация: НЕ ТРЕБУЕТСЯ")
+    print(f"👑 Администратор: {ADMIN_USERNAME}")
+    print(f"🌐 Локальный URL: http://localhost:5000")
+    print(f"🌐 Сетевой URL:   http://{local_ip}:5000")
+    print(f"📁 База данных:   casino.db")
     print("="*60)
-    print("📋 Доступные endpoints:")
+    print("📊 Доступные endpoints:")
     print("   • GET /users/get?name=USERNAME")
     print("   • GET /users/pay?name=USERNAME&money=AMOUNT") 
     print("   • GET /users/give?name=USERNAME&money=AMOUNT")
     print("   • GET /users/top")
     print("   • GET /get/time")
+    print("   • GET /admin/info")
+    print("   • GET /admin/users")
     print("="*60)
-    print("🚀 Сервер запущен! Для остановки нажмите Ctrl+C")
+    print("🚀 Сервер запущен!")
     print("="*60 + "\n")
     
-    # Запускаем сервер
     app.run(host='0.0.0.0', port=5000, debug=False)
