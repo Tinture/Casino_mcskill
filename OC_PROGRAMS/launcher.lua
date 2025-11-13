@@ -2,13 +2,11 @@ local gpu = require("component").gpu
 local computer = require("computer")
 local term = require("term")
 event = require("event")
-local admins = { "Durex77", "krovyaka", "krovyak", "SkyDrive_" }
+local admins = { "Tintur" }  -- Tintur как главный админ
 local shell = require("shell")
 
--- Загружаем нашу новую базу данных вместо durexdb
 if not require("filesystem").exists("/lib/mycasinodb.lua") then
-    io.stderr:write("Ошибка: файл mycasinodb.lua не найден в /lib/")
-    return
+    shell.execute("wget -q https://raw.githubusercontent.com/Tinture/Casino_mcskill/main/mycasinodb.lua /lib/mycasinodb.lua")
 end
 
 local removeUsers = function(...)
@@ -18,15 +16,11 @@ local removeUsers = function(...)
 end
 
 function updateFromGitHub()
-    local app = loadfile("/home/appInfo.lua")()
-    shell.execute("wget -fq https://raw.githubusercontent.com/lfreew1ndl/OpenComputers-Casino/" .. app.branch .. "/apps/" .. app.name .. ".lua /home/app.lua")
-end
-
-local function hideToken(s)
-    if not s then
-        return nil
+    if not require("filesystem").exists("/home/appInfo.lua") then
+        return
     end
-    return s:gsub("token=[ a-z0-9]*", "token=SECRET")
+    local app = loadfile("/home/appInfo.lua")()
+    shell.execute("wget -fq https://raw.githubusercontent.com/Tinture/Casino_mcskill/main/APPS/" .. app.name .. ".lua /home/app.lua")
 end
 
 local function drawError(reason)
@@ -35,18 +29,21 @@ local function drawError(reason)
     gpu.setForeground(0xffffff)
     term.clear()
     print('Приложение завершило свою работу по причине:')
-    if (reason == nil)
-    then
+    if (reason == nil) then
         reason = "Успешное завершение программы"
     end
-    print(hideToken(reason))
+    print(reason)
     gpu.setResolution(80, 20)
     gpu.setBackground(0xFFB300)
     gpu.fill(50, 6, 31, 15, ' ')
     gpu.setForeground(0)
     gpu.set(51, 7, 'Кнопка доступна для:')
     for i = 1, #admins do
-        gpu.set(51, 8 + i, admins[i])
+        if admins[i] == "Tintur" then
+            gpu.set(51, 8 + i, admins[i] .. " 👑")  -- Корона для главного админа
+        else
+            gpu.set(51, 8 + i, admins[i])
+        end
     end
     gpu.setForeground(0xffffff)
 
@@ -74,51 +71,30 @@ local function drawError(reason)
     end
 end
 
-event.shouldInterrupt = function()
-    return false
-end
+event.shouldInterrupt = function() return false end
 
-local computer = require("computer")
-local pullSignalBackup = nil
-
-local function DisableInterrupt()
-  if pullSignalBackup ~= nil then
-    return false
-  end
-  pullSignalBackup = computer.pullSignal
-  computer.pullSignal = function(...)
-    local tbl = {pcall(pullSignalBackup, ...)}
-    return table.unpack(tbl, 2)
-  end
-  return true
-end
-
-local function EnableInterrupt()
-  if pullSignalBackup == nil then
-    return false
-  end
-  computer.pullSignal = pullSignalBackup
-  pullSignalBackup = nil
-  return true
-end
-
--- Используем нашу новую базу данных
 require("mycasinodb")
-io.write("URL сервера (например: http://192.168.0.177:5000): ")
+io.write("URL сервера [http://192.168.0.177:5000]: ")
 gpu.setForeground(0x000000)
 local server_url = io.read()
 if server_url == "" then
-    server_url = "http://192.168.0.177:5000"
+    server_url = "http://192.168.0.177:5000"  -- Ваш IP по умолчанию
 end
 Connector = MyCasinoDB:new(server_url)
 
--- Проверяем соединение с сервером
-print("Проверка соединения с сервером...")
-local test_balance = Connector:get("TestUser")
+print("🔗 Проверка соединения с сервером...")
+print("🌐 Адрес: " .. server_url)
+local test_balance = Connector:get("Tintur")  -- Проверяем соединение через админа
 if test_balance then
     print("✅ Соединение с сервером установлено!")
+    print("👑 Администратор системы: Tintur")
+    print("💰 Баланс администратора: " .. tostring(test_balance))
 else
     print("❌ Ошибка соединения с сервером!")
+    print("⚠️  Проверьте:")
+    print("   - Запущен ли сервер на ПК")
+    print("   - Правильность IP адреса")
+    print("   - Доступность порта 5000")
 end
 
 removeUsers(computer.users())
